@@ -1,0 +1,2 @@
+cryptography>=41
+segno>=1.5
