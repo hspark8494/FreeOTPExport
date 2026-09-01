@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<!--
+  Template for freeotp_export.py --html. render_html() substitutes the double-underscore
+  placeholders: TITLE (page title), COUNT (token count), DATE (YYYY-MM-DD), CARDS (one
+  div.card per token with an inline SVG QR) and TOKENS (JSON array of
+  {type, issuer, label, secret, algorithm, digits, period, counter, uri}).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1c1e21; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111318; --card:#1b1e26; --ink:#e7e9ee; --muted:#9aa1ad; --line:#2a2e39; --accent:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:24px 20px 8px; max-width:1100px; margin:0 auto; }
+  header h1 { margin:0 0 4px; font-size:22px; }
+  header p { margin:0; color:var(--muted); font-size:13px; }
+  .warn { color:#b45309; }
+  .tools { max-width:1100px; margin:12px auto 0; padding:0 20px; }
+  .tools input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); font-size:15px; }
+  .grid { max-width:1100px; margin:16px auto 40px; padding:0 20px; display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; cursor:pointer; display:flex; gap:12px; align-items:center; transition:border-color .15s, transform .1s; }
+  .card:hover { border-color:var(--accent); transform:translateY(-1px); }
+  .card svg { width:64px; height:64px; flex:none; background:#fff; border-radius:6px; padding:3px; }
+  .card .meta { min-width:0; }
+  .card .issuer { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .label { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { display:inline-block; font-size:11px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); margin-top:4px; }
+  .hidden { display:none !important; }
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  .modal { background:var(--card); border-radius:16px; width:min(460px,100%); max-height:100%; overflow:auto; padding:22px; position:relative; }
+  .modal .close { position:absolute; top:10px; right:12px; border:0; background:none; font-size:26px; color:var(--muted); cursor:pointer; }
+  .modal h2 { margin:0; font-size:19px; word-break:break-word; }
+  .modal .sub { color:var(--muted); font-size:13px; margin-bottom:14px; word-break:break-word; }
+  .modal .qr { background:#fff; border-radius:12px; padding:12px; }
+  .modal .qr svg { width:100%; height:auto; display:block; }
+  .code { font:600 40px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.12em; text-align:center; margin:18px 0 6px; cursor:pointer; }
+  .bar { height:4px; background:var(--line); border-radius:2px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--accent); transition:width 1s linear; }
+  .note { text-align:center; color:var(--muted); font-size:12px; margin-top:6px; min-height:1em; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; font-size:13px; margin:16px 0 0; }
+  dt { color:var(--muted); }
+  dd { margin:0; word-break:break-all; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .copy { border:1px solid var(--line); background:none; color:var(--accent); border-radius:6px; padding:1px 7px; font-size:12px; cursor:pointer; margin-left:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <p>__COUNT__ tokens exported from FreeOTP on __DATE__. Click a token to enlarge its QR code and see the current code.</p>
+  <p class="warn">This file contains plaintext OTP secrets. Keep it as private as a password.</p>
+</header>
+<div class="tools"><input id="search" type="search" placeholder="Filter by issuer or account..." autocomplete="off"></div>
+<main class="grid" id="grid">__CARDS__</main>
+
+<div class="overlay hidden" id="overlay">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button class="close" id="close" aria-label="Close">&times;</button>
+    <h2 id="m-issuer"></h2>
+    <div class="sub" id="m-label"></div>
+    <div class="qr" id="m-qr"></div>
+    <div class="code" id="m-code" title="Click to copy">------</div>
+    <div class="bar"><i id="m-bar"></i></div>
+    <div class="note" id="m-note"></div>
+    <dl>
+      <dt>Type</dt><dd id="m-type"></dd>
+      <dt>Secret</dt><dd><span id="m-secret"></span><button class="copy" data-copy="m-secret">copy</button></dd>
+      <dt>URI</dt><dd><span id="m-uri"></span><button class="copy" data-copy="m-uri">copy</button></dd>
+    </dl>
+  </div>
+</div>
+
+<script>
+const TOKENS = __TOKENS__;
+const STEAM = "23456789BCDFGHJKMNPQRTVWXY";
+const HASHES = { SHA1:"SHA-1", SHA256:"SHA-256", SHA384:"SHA-384", SHA512:"SHA-512" };
+
+function b32decode(s) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0, val = 0, out = [];
+  for (const ch of s.toUpperCase().replace(/=+$/, "")) {
+    const v = A.indexOf(ch); if (v < 0) continue;
+    val = (val << 5) | v; bits += 5;
+    if (bits >= 8) { out.push((val >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return new Uint8Array(out);
+}
+
+async function hotp(t, counter) {
+  const hash = HASHES[t.algorithm];
+  if (!hash) throw new Error(t.algorithm + " not supported by this browser");
+  if (!(crypto && crypto.subtle)) throw new Error("WebCrypto unavailable (open via file:// or https://)");
+  const key = await crypto.subtle.importKey("raw", b32decode(t.secret), { name:"HMAC", hash }, false, ["sign"]);
+  const msg = new DataView(new ArrayBuffer(8));
+  msg.setUint32(0, Math.floor(counter / 4294967296)); msg.setUint32(4, counter >>> 0);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, msg.buffer));
+  const off = mac[mac.length - 1] & 0x0f;
+  let bin = ((mac[off] & 0x7f) << 24 | mac[off+1] << 16 | mac[off+2] << 8 | mac[off+3]) >>> 0;
+  if (t.issuer === "Steam") {
+    let s = ""; for (let i = 0; i < t.digits; i++) { s += STEAM[bin % 26]; bin = Math.floor(bin / 26); }
+    return s;
+  }
+  return String(bin % 10 ** t.digits).padStart(t.digits, "0");
+}
+
+const $ = id => document.getElementById(id);
+let current = null, timer = null, lastStep = -1;
+
+async function tick() {
+  const t = current; if (!t) return;
+  try {
+    if (t.type === "TOTP") {
+      const now = Date.now() / 1000, step = Math.floor(now / t.period), left = t.period - (now % t.period);
+      if (step !== lastStep) { $("m-code").textContent = await hotp(t, step); lastStep = step; }
+      $("m-bar").style.width = (left / t.period * 100) + "%";
+      $("m-note").textContent = "refreshes in " + Math.ceil(left) + "s";
+    } else {
+      if (lastStep !== t.counter) { $("m-code").textContent = await hotp(t, t.counter || 0); lastStep = t.counter; }
+      $("m-bar").style.width = "100%";
+      $("m-note").textContent = "HOTP counter " + (t.counter || 0);
+    }
+  } catch (e) { $("m-code").textContent = "n/a"; $("m-note").textContent = e.message; }
+}
+
+function open(i) {
+  current = TOKENS[i]; lastStep = -1;
+  const t = current;
+  $("m-issuer").textContent = t.issuer || t.label;
+  $("m-label").textContent = t.issuer ? t.label : "";
+  $("m-qr").innerHTML = document.querySelector(`.card[data-i="${i}"] svg`).outerHTML;
+  $("m-type").textContent = `${t.type} · ${t.algorithm} · ${t.digits} digits · ` + (t.type === "TOTP" ? t.period + "s" : "counter " + (t.counter || 0));
+  $("m-secret").textContent = t.secret;
+  $("m-uri").textContent = t.uri;
+  $("m-code").textContent = "------"; $("m-bar").style.width = "0";
+  $("overlay").classList.remove("hidden");
+  tick(); clearInterval(timer); timer = setInterval(tick, 1000);
+}
+function close() { $("overlay").classList.add("hidden"); clearInterval(timer); current = null; }
+
+function copyText(txt, el) {
+  navigator.clipboard?.writeText(txt).then(() => { const o = el.textContent; el.textContent = "copied"; setTimeout(() => el.textContent = o, 900); });
+}
+
+document.querySelectorAll(".card").forEach(c => c.addEventListener("click", () => open(+c.dataset.i)));
+$("close").addEventListener("click", close);
+$("overlay").addEventListener("click", e => { if (e.target === $("overlay")) close(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
+$("m-code").addEventListener("click", e => copyText(e.target.textContent, e.target));
+document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", () => copyText($(b.dataset.copy).textContent, b)));
+$("search").addEventListener("input", e => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("hidden", q && !c.dataset.search.includes(q)));
+});
+</script>
+</body>
+</html>
